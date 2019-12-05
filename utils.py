@@ -9,6 +9,10 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Dropout
 
 def parse_rinex(kind, name=None):
+    """ Parse observation files. If 'name' is given, only
+        that specific file is parse, otherwise parse all files
+        in 'kind' folder.
+    """
     path = kind + '/'
     if not name:
         X = {"E":[], "G":[]}
@@ -28,8 +32,8 @@ def parse_rinex(kind, name=None):
         X = {"E":[], "G":[]}
         try:
             print('Parsing ' + name)
-            gps = gr.load(path + f, use='G').to_dataframe()
-            gal = gr.load(path + f, use='E').to_dataframe()
+            gps = gr.load(path + name, use='G').to_dataframe()
+            gal = gr.load(path + name, use='E').to_dataframe()
             if not gps.empty:
                 X["G"].append(gps)
             if not gal.empty:
@@ -39,6 +43,10 @@ def parse_rinex(kind, name=None):
         return X
 
 def get_features(df):
+    """ Get features from observation data.
+        That is, compute the average signal strength off all
+        satellites in a constellation.
+    """
     satellite = df.index.get_level_values('sv').unique()
     tmp = []
     avg = []
@@ -53,6 +61,8 @@ def get_features(df):
             index=_X.index, columns=['AVG', 'OFF'])
 
 def get_feature_window(array, window):
+    """ Split the features into slices of length 'window'.
+    """
     outer = []
     inner = []
     for i in range(len(array)):
@@ -63,13 +73,19 @@ def get_feature_window(array, window):
     return np.array(outer)
 
 def get_target_window(array, window):
+    """ Split the targets into slices of length 'window'.
+    """
     tmp = [array[i:i+window, :] for i in range(0, array.shape[0], window)]
     if len(array) % window == 0:
-        return [int(i.sum() > 2) for i in tmp]
+        return [int(i.sum() > (window / 2)) for i in tmp]
     else:
-        return [int(i.sum() > 2) for i in tmp[:-1]]
+        return [int(i.sum() > (window / 2)) for i in tmp[:-1]]
 
 def prepare_train_data(kind, dic, window):
+    """ Compute new features from training data, label
+        each time instance as either interfered or not, finally
+        split both features and targets into chunks of equal length.
+    """
     features = {'E': [], 'G': []}
     targets = {'E': [], 'G': []}
 
@@ -88,17 +104,16 @@ def prepare_train_data(kind, dic, window):
     for k, v in targets.items():
         tmp = []
         for i in v:
-            target_array = np.array(i).reshape((len(i), 1))
-            tmp.append(get_target_window(target_array, 5))
+            tmp.append(get_target_window(np.array(i).reshape((len(i), 1)), 5))
         targets[k] = tmp
 
     for k, v in features.items():
-        for i in v:
-            feature_array = i.fillna(0).to_numpy()
-            features[k] = [get_feature_window(feature_array, 5) for i in v]
+        features[k] = [get_feature_window(i.fillna(0).to_numpy(), 5) for i in v]
     return features, targets
 
 def prepare_test_data(kind, dic, window):
+    """ Compute new features for test data and split into chunks.
+    """
     features = {'E': [], 'G': []}
     for k, v in dic.items():
         for i in v:
@@ -107,18 +122,25 @@ def prepare_test_data(kind, dic, window):
     return features
 
 def stack_features(dic):
+    """ Stack features from different files into one.
+    """
     X_dic = {}
     for k, v in dic.items():
         X_dic[k] = reduce(lambda x, y: np.vstack((x, y)), v)
     return X_dic
 
 def stack_target(dic):
+    """ Stack target from different files into one.
+    """
     y_dic = {}
     for k, v in dic.items():
         y_dic[k] = reduce(lambda x, y: x + y, v)
     return y_dic
 
 def label_static(time):
+    """ Label time instances as either 1 (interfered) or 0 (normal)
+        according to reference data description for static interference.
+    """
     if 9 <= time.minute < 10:
         return 1
     if 11 <= time.minute < 12:
@@ -156,6 +178,9 @@ def label_static(time):
     return 0
 
 def label_kinematic(time):
+    """ Label time instances as either 1 (interfered) or 0 (normal)
+        according to reference data description for kinematic interference.
+    """
     if time.minute == 21:
         return 1
     if time.minute == 22:
@@ -182,9 +207,14 @@ def label_kinematic(time):
     return 0
 
 def label_natural(time):
+    """ Label time instances as either 1 (interfered) or 0 (normal)
+        according to reference data description for natural interference.
+    """
     return 0
 
 def build_models(X, y, lr, epoch, batch, lstm):
+    """ Build RNN models for each constellation (GPS and Galileo).
+    """
     models = {}
     for k, v in X.items():
         model = Sequential()
@@ -205,10 +235,14 @@ def build_models(X, y, lr, epoch, batch, lstm):
     return models
 
 def save_models(models):
+    """ Save trained models for later analysis.
+    """
     for k, v in models.items():
         v.save('models/model_' + k + '.h5')
 
 def load_models():
+    """ Load trained models for analysis.
+    """
     models = {}
     for f in os.listdir('models'):
         constell = f[6:-3]
