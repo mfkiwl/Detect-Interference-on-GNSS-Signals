@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import georinex as gr
+import matplotlib.pyplot as plt
 from functools import reduce
 from keras.models import load_model
 from keras.optimizers import Adam
@@ -29,15 +30,15 @@ def parse_rinex(kind, name=None):
                 print("Something went wrong!!!")
         return X
     else:
-        X = {"E":[], "G":[]}
+        X = {}
         try:
             print('Parsing ' + name)
             gps = gr.load(path + name, use='G').to_dataframe()
             gal = gr.load(path + name, use='E').to_dataframe()
             if not gps.empty:
-                X["G"].append(gps)
+                X["G"] = gps
             if not gal.empty:
-                X["E"].append(gal)
+                X["E"] = gal
         except:
             print("Something went wrong!!!")
         return X
@@ -58,7 +59,8 @@ def get_features(df):
         avg.append(row.mean(skipna=True))
         num_off.append(row.isna().sum())
     return pd.DataFrame(np.array([avg, num_off]).T,
-            index=_X.index, columns=['AVG', 'OFF'])
+            index=_X.index, columns=['Average Signal Strength', \
+                                     'Number of Off Satellites'])
 
 def get_feature_window(array, window):
     """ Split the features into slices of length 'window'.
@@ -111,14 +113,13 @@ def prepare_train_data(kind, dic, window):
         features[k] = [get_feature_window(i.fillna(0).to_numpy(), 5) for i in v]
     return features, targets
 
-def prepare_test_data(kind, dic, window):
+def prepare_test_data(dic, window):
     """ Compute new features for test data and split into chunks.
     """
     features = {'E': [], 'G': []}
     for k, v in dic.items():
-        for i in v:
-            feature_array = get_features(i).fillna(0).to_numpy()
-            features[k] = [get_feature_window(feature_array, window) for i in v]
+        feature_array = get_features(v).fillna(0).to_numpy()
+        features[k] = get_feature_window(feature_array, window)
     return features
 
 def stack_features(dic):
@@ -212,11 +213,15 @@ def label_natural(time):
     """
     return 0
 
-def build_models(X, y, lr, epoch, batch, lstm):
+def build_models(X, y, lr, epoch, batch, lstm, verbose=0):
     """ Build RNN models for each constellation (GPS and Galileo).
     """
     models = {}
     for k, v in X.items():
+        if k == 'G':
+            print('Training model for GPS ....')
+        else:
+            print('Training model for Galileo ....')
         model = Sequential()
         model.add(LSTM(lstm, input_shape=(5, 2), kernel_initializer='he_normal'))
         model.add(Dense(64, activation='relu'))
@@ -230,7 +235,7 @@ def build_models(X, y, lr, epoch, batch, lstm):
                       metrics=['accuracy'])
 
         # fit the model:
-        model.fit(v, y[k], epochs=epoch, batch_size=batch)
+        model.fit(v, y[k], epochs=epoch, batch_size=batch, verbose=verbose)
         models[k] = model
     return models
 
@@ -249,4 +254,19 @@ def load_models():
         models[constell] = load_model('models/'+f)
     return models
 
-
+def visualize_prediction(data, models, window, scale):
+    """ Visualize signal data and interference prediction intervals.
+    """
+    titles = {'G': 'GPS', 'E': 'Galileo'}
+    data_processed = prepare_test_data(data, window)
+    visual = {}
+    for constell, data_p in data_processed.items():
+        predict = []
+        for pre in models[constell].predict(data_p):
+            for _ in range(window):
+                predict.append(np.round(pre[0])*scale)
+        vis = get_features(data[constell]).iloc[: len(predict), :]
+        vis['Intentional Interference Detection'] = predict
+        visual[constell] = vis
+    visual['G'].plot(figsize=(12, 5), title='GPS')
+    visual['E'].plot(figsize=(12, 5), title='Galileo')
