@@ -1,4 +1,4 @@
-# Detect Interference on GNSS Signals
+# Interference Detection on GNSS Signals
 This project is my solution to UltraHack: Galileo Innovation Challenge. Link to
 the event: https://ultrahack.org/galileoinnovationchallenge.
 
